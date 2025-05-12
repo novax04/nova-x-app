@@ -1,0 +1,7 @@
+flask
+flask-cors
+requests
+python-dotenv
+PyPDF2
+beautifulsoup4
+werkzeug
