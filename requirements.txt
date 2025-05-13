@@ -8,3 +8,4 @@ werkzeug
 Pillow
 pytesseract
 gunicorn
+jwt
