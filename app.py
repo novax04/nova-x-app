@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from werkzeug.utils import secure_filename
 from PIL import Image
 import pytesseract
+import jwt
+from functools import wraps
 
 # Load environment variables
 load_dotenv()
@@ -20,7 +22,7 @@ CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "sk_test_Fs2ElZLBRHRmMezqPMnqjQ
 CLERK_PUBLISHABLE_KEY = os.getenv("CLERK_PUBLISHABLE_KEY", "pk_test_cHJlY2lzZS1hbnRlYXRlci0yOC5jbGVyay5hY2NvdW50cy5kZXYk")  # Default from your data.txt
 CLERK_JWKS_URL = "https://helpful-ladybird-48.clerk.accounts.dev/.well-known/jwks.json"
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='public')
 CORS(app)
 
 # Authentication decorator
@@ -29,51 +31,42 @@ def requires_auth(f):
     def decorated(*args, **kwargs):
         auth_header = request.headers.get('Authorization', '')
         if not auth_header.startswith('Bearer '):
-            # If no token, continue but mark as unauthenticated
             return f(user_id=None, *args, **kwargs)
         
         token = auth_header.split(' ')[1]
         try:
-            # Verify and decode the JWT token
             user_id = verify_token(token)
             return f(user_id=user_id, *args, **kwargs)
         except Exception as e:
             print(f"Authentication error: {str(e)}")
-            # Continue but mark as unauthenticated
             return f(user_id=None, *args, **kwargs)
     return decorated
 
 def get_jwks():
     global jwks_cache, jwks_fetched_at
     
-    # Use cached JWKS if it's less than 1 hour old
-    now = datetime.datetime.now()
-    if jwks_cache and jwks_fetched_at and (now - jwks_fetched_at).total_seconds() < 3600:
+    if jwks_cache and jwks_fetched_at and (datetime.datetime.now() - jwks_fetched_at).total_seconds() < 3600:
         return jwks_cache
     
-    # Fetch fresh JWKS from Clerk
     try:
         response = requests.get(CLERK_JWKS_URL)
         jwks_cache = response.json()
-        jwks_fetched_at = now
+        jwks_fetched_at = datetime.datetime.now()
         return jwks_cache
     except Exception as e:
         print(f"Error fetching JWKS: {str(e)}")
-        # Return the cached version if we have one, even if it's old
         if jwks_cache:
             return jwks_cache
         raise
 
 def verify_token(token):
     try:
-        # Get the JWT headers to extract the key ID (kid)
         headers = jwt.get_unverified_header(token)
         kid = headers.get('kid')
         
         if not kid:
             raise ValueError("No 'kid' in token header")
         
-        # Get the JWK set and find the key that matches the kid
         jwks = get_jwks()
         key = None
         for jwk in jwks.get('keys', []):
@@ -84,19 +77,15 @@ def verify_token(token):
         if not key:
             raise ValueError(f"No matching key found for kid: {kid}")
         
-        # Convert the JWK to a format that PyJWT can use
         public_key = jwt.algorithms.RSAAlgorithm.from_jwk(key)
         
-        # Verify and decode the token
         payload = jwt.decode(
             token,
             public_key,
             algorithms=['RS256'],
-            options={"verify_aud": False}  # Skip audience verification
+            options={"verify_aud": False}
         )
         
-        # Extract the user ID from the payload
-        # This assumes Clerk puts user ID in 'sub' claim
         user_id = payload.get('sub')
         if not user_id:
             raise ValueError("No user ID in token payload")
@@ -200,7 +189,6 @@ def analyze_image():
         return jsonify({'error': 'No selected image'}), 400
 
     try:
-        # Verify Tesseract is available
         pytesseract.get_tesseract_version()
     except EnvironmentError:
         return jsonify({
@@ -294,7 +282,7 @@ def get_weather():
 @app.route('/', defaults={'path': 'index.html'})
 @app.route('/<path:path>')
 def serve_static(path):
-    return send_from_directory('public', path)
+    return send_from_directory(app.static_folder, path)
 
 if __name__ == '__main__':
     app.run(port=5000)
